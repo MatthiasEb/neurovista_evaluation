@@ -1,9 +1,8 @@
 import argparse
 import os
 from pathlib import Path
-from data_generator import SegmentGenerator
+from data_generator import SupervisedGenerator
 from model import nv1x16
-import xarray as xr
 
 parser = argparse.ArgumentParser()
 # Algorithm settings
@@ -39,14 +38,20 @@ if not os.path.isfile(Path(args.path) / csv[args.mode]):
     raise FileNotFoundError(
         'Please specify the path where the csv file can be found or copy the csv file to current location')
 
-dg = SegmentGenerator(filenames_csv_path=Path(args.path) / csv[args.mode],
-                      file_segment_length=args.file_segment_length,
-                      batch_size=40)
+dg = SupervisedGenerator(filenames_csv_path=Path(args.path) / csv[args.mode],
+                         file_segment_length=args.file_segment_length,
+                         buffer_length=4000,
+                         batch_size=40,
+                         shuffle=True)
 
 model = nv1x16()
 
 model.summary()
 if args.mode in [0, 1]:
-    model.fit(x=dg, shuffle=False, use_multiprocessing=True, workers=6, epochs=10)
+    model.fit(x=dg,
+              shuffle=False,  # do not change this setting!
+              use_multiprocessing=True,
+              workers=6,
+              epochs=10)
 
 print('done')

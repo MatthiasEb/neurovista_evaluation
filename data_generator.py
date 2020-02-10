@@ -4,56 +4,38 @@ import tensorflow as tf
 import numpy as np
 import scipy.io as io
 import pandas as pd
+import sys
 
 # define several possible standardization methods
-STANDARDIZE_OPTIONS = ['global_channelwise', 'global', 'segment_channelwise', 'segment', 'batch', 'batch_channelwise',
-                       'file', 'file_channelwise', None]
-# standardization methods that use the same scalings for the whole set
-GLOBAL_STANDARDIZE = STANDARDIZE_OPTIONS[:2]
-# generator running in train/val/test mode?
-MODE_OPTIONS = [0, 1, 2, 3]
-# generator returns labels only in train mode
-RETURN_LABELS = MODE_OPTIONS[:1]
+STANDARDIZE_OPTIONS = ['file', 'file_channelwise', None]
 
 
-# %% define Tensorflow Generator
-class SegmentGenerator(tf.keras.utils.Sequence):
+# %% define Tensorflow Generator that provides examples and labels
+class SupervisedGenerator(tf.keras.utils.Sequence):
     def __init__(self,
                  filenames_csv_path,
                  file_segment_length,
                  buffer_length=4000,
-                 expand_cnn_dim=True,
                  batch_size=1,
                  shuffle=True,
                  standardize_mode=None,
-                 mode=0,
-                 mean=None,
-                 std=None,
                  class_weights='auto'):
 
         # --- pass arguments ---
         self.batch_size = batch_size
         self.file_segment_length = file_segment_length
-        self.expand_cnn_dim = expand_cnn_dim
         self.csv = pd.read_csv(filenames_csv_path)
-        if mode not in MODE_OPTIONS:
-            raise ValueError("'mode' hast to be one of {}.".format(MODE_OPTIONS))
-        self.mode = mode
         self.segm_length = 6000
         self.n_channels = 16
         self.samples_per_file = self.file_segment_length * 4  # draw 15 s segments
         if standardize_mode not in STANDARDIZE_OPTIONS:
             raise ValueError("'standardize_mode' hast to be one of {}.".format(STANDARDIZE_OPTIONS))
+        self.standardize=standardize_mode
 
-        self.shape = (len(self.csv)*self.samples_per_file, self.segm_length, self.n_channels)
-        if self.expand_cnn_dim:
-            self.shape += (1,)
+        self.shape = (len(self.csv) * self.samples_per_file, self.segm_length, self.n_channels)
         self.shuffle = shuffle
 
         # --- setup class weights ---
-        if self.mode not in RETURN_LABELS and class_weights is not None:
-            raise RuntimeWarning("in validation and test modes, class weights are ignored.")
-
         if class_weights == 'auto':
             pi = self.csv['class'].sum()
             ii = len(self.csv) - pi
@@ -70,46 +52,35 @@ class SegmentGenerator(tf.keras.utils.Sequence):
         # --- setup file IO ---
         # open a specified number of files, draw samples randomly from those opened files
         self.buffer_length = buffer_length
-        self.buffer = []
+        if self.shuffle:
+            self.buffer = tf.queue.RandomShuffleQueue(capacity=self.buffer_length,
+                                                      min_after_dequeue=1000,
+                                                      dtypes=[tf.float32, tf.int16],
+                                                      shapes=[(self.segm_length, self.n_channels, 1), ()])
+        else:
+            self.buffer = tf.queue.FIFOQueue(capacity=self.buffer_length,
+                                             dtypes=[tf.float32, tf.int16],
+                                             shapes=[(self.segm_length, self.n_channels, 1), ()])
         self.n_file = len(self.csv)
-
-
-        # --- setup standardization ---
-        self.standardize = None
         self.on_epoch_end()
-        self.norm_count = 0
-        # optional: standardize train set with global mean/std
-        if standardize_mode in GLOBAL_STANDARDIZE:
-            if mode in [0, 1]:
-                print('Calculating Train Mean, Train STD...')
-                mean = 0
-                std = 0
 
-                for data in self:
-                    data = data[0]
-                    if standardize_mode == 'global_channelwise':
-                        mean += data.mean(axis=1).mean(axis=0).squeeze()
-                        std += data.std(axis=1).mean(axis=0).squeeze()
-                    else:
-                        mean += data.mean()
-                        std += data.std()
-
-                mean = mean / len(self)
-                std = std / len(self)
-            # if train set was standardized by global mean/std , use train sets' mean/std to standardize test/validation set
-            elif mean is None or std is None:
-                raise ValueError('Need Training Mean and STD as argument for standardizing validation or test data')
-
-        self.mean = mean
-        self.std = std
-        self.standardize = standardize_mode
+    def setup_buffer(self):
+        if self.shuffle:
+            self.buffer = tf.queue.RandomShuffleQueue(capacity=self.buffer_length,
+                                                      min_after_dequeue=0,
+                                                      dtypes=[tf.float32, tf.int16],
+                                                      shapes=[(self.segm_length, self.n_channels, 1), ()])
+        else:
+            self.buffer = tf.queue.FIFOQueue(capacity=self.buffer_length,
+                                             dtypes=[tf.float32, tf.int16],
+                                             shapes=[(self.segm_length, self.n_channels, 1), ()])
 
     def fill_buffer(self):
         # check, if not all files have been loaded already
 
-        while len(self.buffer) < self.buffer_length and self.n_file < len(self.csv):
+        while self.buffer.size().numpy() < self.buffer_length and self.n_file < len(self.csv):
+            # sys.stdout.write('\r' + str(self.buffer.size()))
             m = io.loadmat(self.csv.iloc[self.n_file]['image'])
-
             x = m['dataStruct'][0][0][0]
             if self.standardize == 'file':
                 x -= x.mean()
@@ -117,16 +88,12 @@ class SegmentGenerator(tf.keras.utils.Sequence):
             elif self.standardize == 'file_channelwise':
                 x -= x.mean(axis=0)
                 x /= x.std(axis=0)
-            x = x.reshape(-1, 1, self.segm_length, self.n_channels).astype('float32')
-            if self.mode in RETURN_LABELS:
-                y = np.ones(x.shape[0]) * self.csv.iloc[self.n_file]['class']
-                self.buffer += list(zip(x, y))
-            else:
-                self.buffer += list(x)
+            x = x.reshape(-1, self.segm_length, self.n_channels, 1).astype('float32')
+            y = np.ones(x.shape[0]) * self.csv.iloc[self.n_file]['class'].astype('int16')
+            self.buffer.enqueue_many((x, y))
             self.n_file += 1
-
-        if self.shuffle:
-            np.random.shuffle(self.buffer)
+            if self.n_file == len(self.csv):
+                self.buffer.close()
 
     def on_epoch_end(self):
         'Updates indexes after each epoch'
@@ -136,11 +103,16 @@ class SegmentGenerator(tf.keras.utils.Sequence):
             self.csv = self.csv.iloc[idx]
         # check, if we have run through the whole dataset
         assert self.n_file == len(self.csv)
-        assert len(self.buffer) <= self.batch_size
+        assert self.buffer.size() == 0
+
+    def on_epoch_start(self):
         self.n_file = 0
+        self.setup_buffer()
+        self.previous_batch = None
+        self.previous_index = None
 
     def __len__(self):
-        return int(np.ceil(len(self.csv)*self.samples_per_file / self.batch_size))
+        return int(np.ceil(len(self.csv) * self.samples_per_file / self.batch_size))
 
     def __getitem__(self, index):
         """
@@ -150,82 +122,41 @@ class SegmentGenerator(tf.keras.utils.Sequence):
         :type index: int
         :return: Batch
         """
-        if self.n_file < len(self.csv):
-            self.fill_buffer()  # fill buffer
-        last_batch = len(self.buffer) <= self.batch_size
-        return_labels = self.mode in RETURN_LABELS
+        if index == 0:
+            self.on_epoch_start()
+        self.fill_buffer()  # fill buffer
+        x, y = self.buffer.dequeue_up_to(self.batch_size)
 
-        # Pop batch
-        if not last_batch:
-            b = np.array(self.buffer[:self.batch_size])
-            del self.buffer[:self.batch_size]
+        if index == len(self) - 1:
+            self.on_epoch_end()
 
+        if self.class_weights is None:
+            return x, y
         else:
-            b = np.array(self.buffer[:])
-            # do not delete last batch, since queue will be filled with it
-
-        if return_labels:
-            x = np.concatenate(b[:, 0])
-        else:
-            x = np.concatenate(b)
-
-        if self.standardize is not None:
-            x = self.norm_scale(x)
-
-        if self.expand_cnn_dim:
-            x = np.expand_dims(x, -1)
-        if return_labels:
-            y = np.array(b[:, 1], dtype=int)
-            if self.class_weights is None:
-                return x, y
-            else:
-                sw = np.zeros(y.shape)
-                sw[y == 0] = self.class_weights[0]
-                sw[y == 1] = self.class_weights[1]
-                return x, y, sw
-        else:
-            return x
-
-    def norm_scale(self, data):
-        if self.standardize in ['file', 'file_channelwise']:
-            return data
-        if self.standardize in GLOBAL_STANDARDIZE:
-            pass
-        elif self.standardize == 'batch':
-            self.mean = data.mean()
-            self.std = data.std()
-        elif self.standardize == 'batch_channelwise':
-            self.mean = data.mean(axis=(0, 1))
-            self.std = data.std(axis=(0, 1)) + np.finfo(np.float32).eps
-        elif self.standardize == 'segment_channelwise':
-            self.mean = data.mean(axis=1)[:, np.newaxis]
-            self.std = data.std(axis=1)[:, np.newaxis] + np.finfo(np.float32).eps
-        elif self.standardize == 'segment':
-            self.mean = data.mean(axis=(1, 2))[:, np.newaxis, np.newaxis]
-            self.std = data.std(axis=(1, 2))[:, np.newaxis, np.newaxis] + np.finfo(np.float32).eps
-
-        return (data - self.mean) / self.std
+            sw = np.zeros(y.shape)
+            sw[y == 0] = self.class_weights[0]
+            sw[y == 1] = self.class_weights[1]
+            return x, y, sw
 
 
 # %% execute only if run as a script
 if __name__ == '__main__':
     # %% provide inputs
-    fn ='/home/s4238870/code/neurovista_evaluation/sample.csv'
+    fn = '/home/s4238870/code/neurovista_evaluation/sample.csv'
     sl = 10  # segment length in minutes
-    test_normalize = False
-    test_epoch = False
+    test_normalize = True
+    test_epoch = True
     test_data = True
     # %% instantiate SegmentGenerator
     bs = 40
     if test_normalize:
         for run, sm in enumerate(STANDARDIZE_OPTIONS):
             print('\n\n=== Standardization mode: {} ==='.format(sm))
-            gen = SegmentGenerator(fn,
-                                   sl,
-                                   mode=0,
-                                   shuffle=True,
-                                   standardize_mode=sm,
-                                   batch_size=bs)
+            gen = SupervisedGenerator(fn,
+                                      sl,
+                                      shuffle=True,
+                                      standardize_mode=sm,
+                                      batch_size=bs)
             k = []
             batch = np.empty(1)
             if run == 0:
@@ -249,12 +180,11 @@ if __name__ == '__main__':
             print('MEAN: {}'.format(X.mean()))
 
     if test_epoch:
-        gen = SegmentGenerator(fn,
-                               sl,
-                               mode=0,
-                               shuffle=True,
-                               standardize_mode='file_channelwise',
-                               batch_size=bs)
+        gen = SupervisedGenerator(fn,
+                                  sl,
+                                  shuffle=True,
+                                  standardize_mode='file_channelwise',
+                                  batch_size=bs)
         for epoch in range(10):
             print('Epoch: {}'.format(epoch))
             for i in range(len(gen)):
@@ -262,15 +192,14 @@ if __name__ == '__main__':
             gen.on_epoch_end()
 
     if test_data:
-        gen = SegmentGenerator(fn,
-                               sl,
-                               mode=0,
-                               shuffle=False,
-                               standardize_mode=None,
-                               batch_size=bs)
+        gen = SupervisedGenerator(fn,
+                                  sl,
+                                  shuffle=False,
+                                  standardize_mode=None,
+                                  batch_size=bs)
         for i in range(len(gen)):
             x, y, z = gen[i]
             m = io.loadmat(gen.csv.iloc[i]['image'])['dataStruct'][0][0][0]
-            assert np.array_equal(x.reshape(m.shape), m)
+            assert np.array_equal(x.numpy().reshape(m.shape), m)
 
     print('test passed.')
