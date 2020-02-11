@@ -4,7 +4,26 @@ import tensorflow as tf
 import numpy as np
 import scipy.io as io
 import pandas as pd
-import sys
+from multiprocessing import Pool, Queue
+import time
+import warnings
+
+q = Queue(50)  # files that can be buffered in multiprocessing pipeline
+
+# define different pipeline stages
+def data_loader(args):
+    fname, label, standardize, shape = args
+    m = io.loadmat(fname)
+    x = m['dataStruct'][0][0][0]
+    if standardize == 'file':
+        x -= x.mean()
+        x /= (x.std() + np.finfo(np.float32).eps)
+    elif standardize == 'file_channelwise':
+        x -= x.mean(axis=0)
+        x /= (x.std(axis=0) + np.finfo(np.float32).eps)
+    x = x.reshape(shape)
+    y = np.ones(x.shape[0]) * label
+    return x.astype('float32'), y.astype('int16')
 
 # define several possible standardization methods
 STANDARDIZE_OPTIONS = ['file', 'file_channelwise', None]
@@ -19,6 +38,7 @@ class SupervisedGenerator(tf.keras.utils.Sequence):
                  batch_size=1,
                  shuffle=True,
                  standardize_mode=None,
+                 n_workers=10,
                  class_weights='auto'):
 
         # --- pass arguments ---
@@ -52,16 +72,13 @@ class SupervisedGenerator(tf.keras.utils.Sequence):
         # --- setup file IO ---
         # open a specified number of files, draw samples randomly from those opened files
         self.buffer_length = buffer_length
-        if self.shuffle:
-            self.buffer = tf.queue.RandomShuffleQueue(capacity=self.buffer_length,
-                                                      min_after_dequeue=1000,
-                                                      dtypes=[tf.float32, tf.int16],
-                                                      shapes=[(self.segm_length, self.n_channels, 1), ()])
-        else:
-            self.buffer = tf.queue.FIFOQueue(capacity=self.buffer_length,
-                                             dtypes=[tf.float32, tf.int16],
-                                             shapes=[(self.segm_length, self.n_channels, 1), ()])
-        self.n_file = len(self.csv)
+        if not shuffle and n_workers > 1:
+            warnings.warn('n_workers > 1 may result in shuffeled data. n_workers set to 1.')
+            n_workers = 1
+        self.n_workers = n_workers
+        self.buffer = None
+        self.pool = None
+        self.setup_buffer()
         self.on_epoch_end()
 
     def setup_buffer(self):
@@ -75,25 +92,17 @@ class SupervisedGenerator(tf.keras.utils.Sequence):
                                              dtypes=[tf.float32, tf.int16],
                                              shapes=[(self.segm_length, self.n_channels, 1), ()])
 
-    def fill_buffer(self):
-        # check, if not all files have been loaded already
+    def setup_buffer_pipeline(self):
+        self.pool = Pool(processes=self.n_workers)
+        labels = self.csv['class'].astype('int16')
+        fnames = self.csv['image']
+        shapes = ((-1, self.segm_length, self.n_channels, 1) for i in range(len(fnames)))
+        standardizes = (self.standardize for i in range(len(fnames)))
 
-        while self.buffer.size().numpy() < self.buffer_length and self.n_file < len(self.csv):
-            # sys.stdout.write('\r' + str(self.buffer.size()))
-            m = io.loadmat(self.csv.iloc[self.n_file]['image'])
-            x = m['dataStruct'][0][0][0]
-            if self.standardize == 'file':
-                x -= x.mean()
-                x /= x.std()
-            elif self.standardize == 'file_channelwise':
-                x -= x.mean(axis=0)
-                x /= x.std(axis=0)
-            x = x.reshape(-1, self.segm_length, self.n_channels, 1).astype('float32')
-            y = np.ones(x.shape[0]) * self.csv.iloc[self.n_file]['class'].astype('int16')
-            self.buffer.enqueue_many((x, y))
-            self.n_file += 1
-            if self.n_file == len(self.csv):
-                self.buffer.close()
+        args = zip(fnames, labels, standardizes, shapes)
+        for i in args:
+            self.pool.apply_async(data_loader, (i,), callback=self.buffer.enqueue_many)
+
 
     def on_epoch_end(self):
         'Updates indexes after each epoch'
@@ -102,14 +111,16 @@ class SupervisedGenerator(tf.keras.utils.Sequence):
             np.random.shuffle(idx)
             self.csv = self.csv.iloc[idx]
         # check, if we have run through the whole dataset
-        assert self.n_file == len(self.csv)
         assert self.buffer.size() == 0
 
+        if self.pool:
+            assert self.pool._taskqueue.empty()
+            self.pool.close()
+            self.pool.join()
+
     def on_epoch_start(self):
-        self.n_file = 0
         self.setup_buffer()
-        self.previous_batch = None
-        self.previous_index = None
+        self.setup_buffer_pipeline()  # fill buffer
 
     def __len__(self):
         return int(np.ceil(len(self.csv) * self.samples_per_file / self.batch_size))
@@ -124,12 +135,13 @@ class SupervisedGenerator(tf.keras.utils.Sequence):
         """
         if index == 0:
             self.on_epoch_start()
-        self.fill_buffer()  # fill buffer
-        x, y = self.buffer.dequeue_up_to(self.batch_size)
 
+        while self.buffer.size() < self.buffer_length and not self.pool._taskqueue.empty():
+            time.sleep(0.3)
+
+        x, y = self.buffer.dequeue_up_to(self.batch_size)
         if index == len(self) - 1:
             self.on_epoch_end()
-
         if self.class_weights is None:
             return x, y
         else:
@@ -137,15 +149,17 @@ class SupervisedGenerator(tf.keras.utils.Sequence):
             sw[y == 0] = self.class_weights[0]
             sw[y == 1] = self.class_weights[1]
             return x, y, sw
-
+    # def __del__(self):
+    #     if self.pool:
+    #         self.pool.terminate()
 
 # %% execute only if run as a script
 if __name__ == '__main__':
     # %% provide inputs
     fn = '/home/s4238870/code/neurovista_evaluation/sample.csv'
     sl = 10  # segment length in minutes
-    test_normalize = True
-    test_epoch = True
+    test_normalize = False
+    test_epoch = False
     test_data = True
     # %% instantiate SegmentGenerator
     bs = 40

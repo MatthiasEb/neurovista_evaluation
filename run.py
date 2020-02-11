@@ -1,8 +1,10 @@
 import argparse
 import os
 from pathlib import Path
+import routines
 from data_generator import SupervisedGenerator
 from model import nv1x16
+import datetime
 
 parser = argparse.ArgumentParser()
 # Algorithm settings
@@ -20,38 +22,17 @@ parser.add_argument('-p', '--patient', help='Patient number, 1 to 15 is availabl
 parser.add_argument('-l', '--file_segment_length', help='Segment length in minutes, 1 or 10', type=int, default=10)
 parser.add_argument('-sm', '--subtract_mean', help='Subtract channelwise mean of each segment', type=bool, default=True)
 
-args = parser.parse_args()
 
-print(args)
+def main():
+    args = parser.parse_args()
+    print(args)
 
-if args.gpu_device is not None:
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_device
+    if args.gpu_device is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_device
 
-csv = {
-    0: 'contest_train_data_labels.csv',
-    1: 'train_filenames_labels_patient{}_segment_length_{}.csv'.format(args.patient, args.file_segment_length),
-    2: 'validation_filenames_patient{}_segment_length_{}.csv'.format(args.patient, args.file_segment_length),
-    3: 'test_filenames_patient{}_segment_length_{}.csv'.format(args.patient, args.file_segment_length)
-}
+    if args.mode in [0, 1]:
+        routines.training(args)
 
-if not os.path.isfile(Path(args.path) / csv[args.mode]):
-    raise FileNotFoundError(
-        'Please specify the path where the csv file can be found or copy the csv file to current location')
+if __name__ == '__main__':
+    main()
 
-dg = SupervisedGenerator(filenames_csv_path=Path(args.path) / csv[args.mode],
-                         file_segment_length=args.file_segment_length,
-                         buffer_length=4000,
-                         batch_size=40,
-                         shuffle=True)
-
-model = nv1x16()
-
-model.summary()
-if args.mode in [0, 1]:
-    model.fit(x=dg,
-              shuffle=False,  # do not change this setting!
-              use_multiprocessing=True,
-              workers=6,
-              epochs=10)
-
-print('done')
