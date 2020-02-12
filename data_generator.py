@@ -57,7 +57,7 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         self.shuffle = shuffle
 
         # --- setup class weights ---
-        if class_weights == 'auto':
+        if class_weights == 'auto' and type(self) == TrainingGenerator:
             pi = self.csv['class'].sum()
             ii = len(self.csv) - pi
             self.class_weights = {0: 1, 1: ii / pi}

@@ -8,7 +8,6 @@ from sklearn.metrics import roc_auc_score, average_precision_score, precision_sc
 
 def get_csv(args):
     csv = {
-        0: 'contest_train_data_labels.csv',
         1: 'train_filenames_labels_patient{}_segment_length_{}.csv'.format(args.patient, args.file_segment_length),
         2: 'validation_filenames_patient{}_segment_length_{}.csv'.format(args.patient, args.file_segment_length),
         3: 'test_filenames_patient{}_segment_length_{}.csv'.format(args.patient, args.file_segment_length)
@@ -77,13 +76,18 @@ def evaluate(args):
     if args.model_file:
         model.load_weights(args.model_file)
     else:
-        model.load_weights('pat{}_{}min_sub{}_model_weights.h5'.format(args.patient,
-                                                                       args.file_segment_length, args.subtract_mean))
+        try:
+            model.load_weights('pat{}_{}min_sub{}_model_weights.h5'.format(args.patient,
+                                                                           args.file_segment_length,
+                                                                           args.subtract_mean))
+        except FileNotFoundError:
+            raise FileNotFoundError('Please train model for specified options and patient before evaluating.')
 
     dg = EvaluationGenerator(filenames_csv_path=get_csv(args),
                              file_segment_length=args.file_segment_length,
                              standardize_mode=standardize_mode,
                              batch_size=args.file_segment_length * 4,
+                             class_weights=None,
                              )
     probs = model.predict(dg, verbose=args.verbose)
     df = pd.read_csv(get_csv(args), index_col=0)
@@ -97,7 +101,7 @@ def evaluate(args):
             print('{}: {:.4f}'.format(n, m(df['class'], probs)))
         print('For Threshold = 0.5:')
         for m, n in zip(metrics[2:], names[2:]):
-            print('{}: {:.4f}'.format(n, m(df['class'], probs>0.5)))
+            print('{}: {:.4f}'.format(n, m(df['class'], probs > 0.5)))
 
     df['class'] = probs
 

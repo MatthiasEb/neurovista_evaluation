@@ -11,13 +11,13 @@ parser.add_argument('-v', '--verbose', help="tf.keras verbosity", type=int, defa
 parser.add_argument('-c', '--max_channels', help="maximum number of kernels in convolution", type=int, default=128)
 parser.add_argument('-gpu', '--gpu_device', help="Which gpu device to use. If unspecified, use CPU.", default=None)
 parser.add_argument('-mf', '--model_file', help="Path to stored model file for model evaluation. "
-                                                "If not specified, trained model for respecitve pateint is expected in "
+                                                "If not specified, trained model for respective patient is expected in "
                                                 "current working directory", default=None)
 
 # Evaluation settings
 parser.add_argument('-csv', '--path', help='path to the csv that includes the files', default='.')
-parser.add_argument('-m', '--mode', help='Mode. 1: training, 2: validation, 3: test', type=int, default=0,
-                    choices=[0, 1, 2, 3])
+parser.add_argument('-m', '--mode', help='Mode. 1: training, 2: validation, 3: test', type=int, default=1,
+                    choices=[1, 2, 3])
 parser.add_argument('-p', '--patient', help='Patient number, 1 to 15 is available', type=int, default=1)
 parser.add_argument('-l', '--file_segment_length', help='Segment length in minutes, 1 or 10', type=int, default=10)
 parser.add_argument('-sm', '--subtract_mean', help='Subtract channelwise mean of each file', type=int, default=1,
@@ -41,7 +41,7 @@ def main():
             warnings.warn('Validating/Testing with GPU!')
 
     # run training
-    if args.mode in [0, 1]:
+    if args.mode == 1:
         routines.training(args)
 
     routines.evaluate(args)
