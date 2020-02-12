@@ -4,29 +4,30 @@ import tensorflow as tf
 import numpy as np
 import scipy.io as io
 import pandas as pd
-from multiprocessing import Pool, Queue
+from multiprocessing import Pool
 import time
 import warnings
-
-q = Queue(50)  # files that can be buffered in multiprocessing pipeline
 
 # define different pipeline stages
 def data_loader(args):
     fname, label, standardize, shape = args
     m = io.loadmat(fname)
     x = m['dataStruct'][0][0][0]
-    if standardize == 'file':
-        x -= x.mean()
-        x /= (x.std() + np.finfo(np.float32).eps)
-    elif standardize == 'file_channelwise':
-        x -= x.mean(axis=0)
-        x /= (x.std(axis=0) + np.finfo(np.float32).eps)
+    if standardize:
+        if standardize.startswith('sm'):
+            x -= x.mean(axis=0)
+        if standardize.endswith('file'):
+            x -= x.mean()
+            x /= (x.std() + np.finfo(np.float32).eps)
+        elif standardize.endswith('file_channelwise'):
+            x -= x.mean(axis=0)
+            x /= (x.std(axis=0) + np.finfo(np.float32).eps)
     x = x.reshape(shape)
     y = np.ones(x.shape[0]) * label
     return x.astype('float32'), y.astype('int16')
 
 # define several possible standardization methods
-STANDARDIZE_OPTIONS = ['file', 'file_channelwise', None]
+STANDARDIZE_OPTIONS = ['sm', 'sm_file', 'sm_file_channelwise','file', 'file_channelwise', None]
 
 
 # %% define Tensorflow Generator that provides examples and labels
@@ -158,8 +159,8 @@ if __name__ == '__main__':
     # %% provide inputs
     fn = '/home/s4238870/code/neurovista_evaluation/sample.csv'
     sl = 10  # segment length in minutes
-    test_normalize = False
-    test_epoch = False
+    test_normalize = True
+    test_epoch = True
     test_data = True
     # %% instantiate SegmentGenerator
     bs = 40
