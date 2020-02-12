@@ -1,5 +1,9 @@
 import tensorflow as tf
 from tensorflow.keras.metrics import Recall, Precision, AUC, BinaryAccuracy
+import tensorflow.keras.backend as K
+
+def mean_pred(y_true, y_pred):
+    return K.mean(y_pred)
 
 def nv1x16(n_kernels=128):
     l1 = 1e-9
@@ -70,6 +74,6 @@ def nv1x16(n_kernels=128):
 
     model.compile(loss=loss,
                   optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-                  metrics=[AUC(curve='ROC', name='roc_auc'), AUC(curve='PR', name='pr_auc'), Precision(), Recall(), BinaryAccuracy()])
+                  metrics=[AUC(curve='ROC', name='roc_auc'), AUC(curve='PR', name='pr_auc'), Precision(), Recall(), mean_pred, BinaryAccuracy()])
 
     return model

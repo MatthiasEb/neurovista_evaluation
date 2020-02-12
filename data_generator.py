@@ -31,7 +31,7 @@ STANDARDIZE_OPTIONS = ['sm', 'sm_file', 'sm_file_channelwise','file', 'file_chan
 
 
 # %% define Tensorflow Generator that provides examples and labels
-class SupervisedGenerator(tf.keras.utils.Sequence):
+class TrainingGenerator(tf.keras.utils.Sequence):
     def __init__(self,
                  filenames_csv_path,
                  file_segment_length,
@@ -104,9 +104,16 @@ class SupervisedGenerator(tf.keras.utils.Sequence):
         for i in args:
             self.pool.apply_async(data_loader, (i,), callback=self.buffer.enqueue_many)
 
+    def cleanup_buffer(self):
+        if self.pool:
+            if self.buffer.size():
+                _ = self.buffer.dequeue_up_to(self.buffer_length)  # flush queue
+
+            self.pool.terminate()  # cleanup processes
+            self.pool.join()
+            self.pool = None
 
     def on_epoch_end(self):
-        'Updates indexes after each epoch'
         if self.shuffle:
             idx = np.arange(len(self.csv))
             np.random.shuffle(idx)
@@ -116,10 +123,10 @@ class SupervisedGenerator(tf.keras.utils.Sequence):
 
         if self.pool:
             assert self.pool._taskqueue.empty()
-            self.pool.close()
-            self.pool.join()
+            self.cleanup_buffer()
 
     def on_epoch_start(self):
+        self.cleanup_buffer()
         self.setup_buffer()
         self.setup_buffer_pipeline()  # fill buffer
 
@@ -127,13 +134,6 @@ class SupervisedGenerator(tf.keras.utils.Sequence):
         return int(np.ceil(len(self.csv) * self.samples_per_file / self.batch_size))
 
     def __getitem__(self, index):
-        """
-        Generates one batch of data.
-
-        :param index: Index
-        :type index: int
-        :return: Batch
-        """
         if index == 0:
             self.on_epoch_start()
 
@@ -150,9 +150,22 @@ class SupervisedGenerator(tf.keras.utils.Sequence):
             sw[y == 0] = self.class_weights[0]
             sw[y == 1] = self.class_weights[1]
             return x, y, sw
-    # def __del__(self):
-    #     if self.pool:
-    #         self.pool.terminate()
+
+class EvaluationGenerator(TrainingGenerator):
+
+    def setup_buffer(self):
+        pass
+    def setup_buffer_pipeline(self):
+        pass
+    def on_epoch_end(self):
+        pass
+    def on_epoch_start(self):
+        pass
+    def __getitem__(self, item):
+        fname = self.csv['image'][item]
+        shape = (-1, self.segm_length, self.n_channels, 1)
+        x, _ = data_loader((fname, 0, self.standardize, shape))
+        return x
 
 # %% execute only if run as a script
 if __name__ == '__main__':
@@ -167,11 +180,11 @@ if __name__ == '__main__':
     if test_normalize:
         for run, sm in enumerate(STANDARDIZE_OPTIONS):
             print('\n\n=== Standardization mode: {} ==='.format(sm))
-            gen = SupervisedGenerator(fn,
-                                      sl,
-                                      shuffle=True,
-                                      standardize_mode=sm,
-                                      batch_size=bs)
+            gen = TrainingGenerator(fn,
+                                    sl,
+                                    shuffle=True,
+                                    standardize_mode=sm,
+                                    batch_size=bs)
             k = []
             batch = np.empty(1)
             if run == 0:
@@ -195,11 +208,11 @@ if __name__ == '__main__':
             print('MEAN: {}'.format(X.mean()))
 
     if test_epoch:
-        gen = SupervisedGenerator(fn,
-                                  sl,
-                                  shuffle=True,
-                                  standardize_mode='file_channelwise',
-                                  batch_size=bs)
+        gen = TrainingGenerator(fn,
+                                sl,
+                                shuffle=True,
+                                standardize_mode='file_channelwise',
+                                batch_size=bs)
         for epoch in range(10):
             print('Epoch: {}'.format(epoch))
             for i in range(len(gen)):
@@ -207,11 +220,11 @@ if __name__ == '__main__':
             gen.on_epoch_end()
 
     if test_data:
-        gen = SupervisedGenerator(fn,
-                                  sl,
-                                  shuffle=False,
-                                  standardize_mode=None,
-                                  batch_size=bs)
+        gen = TrainingGenerator(fn,
+                                sl,
+                                shuffle=False,
+                                standardize_mode=None,
+                                batch_size=bs)
         for i in range(len(gen)):
             x, y, z = gen[i]
             m = io.loadmat(gen.csv.iloc[i]['image'])['dataStruct'][0][0][0]
