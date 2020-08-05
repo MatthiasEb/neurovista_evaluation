@@ -169,7 +169,7 @@ class EvaluationGenerator(TrainingGenerator):
     def on_epoch_start(self):
         pass
     def __getitem__(self, item):
-        fname = self.csv['image'][item]
+        fname = self.csv['image'].iloc[item]
         shape = (-1, self.segm_length, self.n_channels, 1)
         x, _ = data_loader((fname, 0, self.standardize, shape))
         return x

@@ -20,6 +20,8 @@ def main():
     # run training
     if args.mode == 1:
         routines.training(args)
+        if args.run_on_contest_data:
+            routines.evaluate(args)
     else:
         routines.evaluate(args)
 

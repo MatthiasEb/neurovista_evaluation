@@ -52,7 +52,6 @@ def training(args):
 
         model = nv1x16()
 
-        model.summary()
         history = model.fit(x=dg,
                             shuffle=False,  # do not change these settings!
                             use_multiprocessing=False,
@@ -88,21 +87,21 @@ def evaluate(args):
     else:
         standardize_mode = None
 
-
-
     df_filenames = pd.read_csv(get_csv(args))
 
     if args.run_on_contest_data:
-        dfs = [(df_filenames.loc[df_filenames['image'].str.startswith('Pat{}'.format(i))], i) for i in range(1,4)]
-
+        dfs = [(df_filenames.loc[df_filenames['image'].str.contains('Pat{}'.format(i))], i) for i in range(1,4)]
     else:
         dfs = [(df_filenames, args.pat)]
+
+    solutions = []
     for df_filenames, patient in dfs:
         print('Starting Evaluation for Patient {}...'.format(patient))
 
         pat = 'pat{}'.format(patient)
         if args.run_on_contest_data:
             sl = sm = ''
+            args.segment_length_minutes = 10
         else:
             sl = '_{}min'.format(args.file_segment_length)
             sm = '_sub{}'.format(args.subtract_mean)
@@ -110,6 +109,7 @@ def evaluate(args):
 
         model = nv1x16()
         model_path = os.path.join(args.model, model_file)
+        print('Using model located at: {}'.format(model_path))
 
         try:
             model.load_weights(model_path)
@@ -117,33 +117,43 @@ def evaluate(args):
             raise FileNotFoundError('Please train model for specified options and patient before evaluating.')
 
         dg = EvaluationGenerator(df_filenames_csv=df_filenames,
-                                 file_segment_length=args.file_segment_length,
+                                 file_segment_length=args.segment_length_minutes,
                                  standardize_mode=standardize_mode,
-                                 batch_size=args.file_segment_length * 4,
+                                 batch_size=10/args.segment_length_minutes * 40,
                                  class_weights=None)
 
-        probs = model.predict(dg, verbose=args.verbose)
-        df = pd.read_csv(get_csv(args), index_col=0)
-        probs = probs.reshape(len(df), -1).mean(axis=1)
+        probs = model.predict(dg, verbose=0)
+
+        probs = probs.reshape(len(df_filenames), -1).mean(axis=1)
         if args.mode == 1:
             print('Results on training set:')
             metrics = [roc_auc_score, average_precision_score, precision_score, recall_score, accuracy_score]
             names = ['roc_auc', 'average_precision', 'precision', 'recall', 'accuracy']
 
             for m, n in zip(metrics[:2], names[:2]):
-                print('{}: {:.4f}'.format(n, m(df['class'], probs)))
+                print('{}: {:.4f}'.format(n, m(df_filenames['class'], probs)))
             print('For Threshold = 0.5:')
             for m, n in zip(metrics[2:], names[2:]):
-                print('{}: {:.4f}'.format(n, m(df['class'], probs > 0.5)))
+                print('{}: {:.4f}'.format(n, m(df_filenames['class'], probs > 0.5)))
 
-        df['class'] = probs
+        df_filenames['class'] = probs
 
-        Path('solutions').mkdir(exist_ok=True)
+        solutions.append(df_filenames)
+
+    s = pd.concat(solutions)
+    s['image'] = s['image'].str.split('/').str[-1]
+    s['image'] = s['image'].str.split('.').str[0]
+    s = s[['image', 'class']]
+
+    Path(args.solutions).mkdir(exist_ok=True)
+    if args.run_on_contest_data:
+        fn = 'contest_data_solution_matthiasEb_mode{}.csv'.format(args.mode)
+    else:
         fn = 'solution_matthiasEb_pat{}_seg{}_mode{}_subtract{}.csv'.format(args.pat,
                                                                             args.file_segment_length,
                                                                             args.mode,
                                                                             args.subtract_mean)
+    s.to_csv(os.path.join(args.solutions, fn), index=False)
 
-        df.to_csv('solutions/' + fn)
 
     print('Evaluation done')
