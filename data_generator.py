@@ -12,7 +12,10 @@ import warnings
 def data_loader(args):
     fname, label, standardize, shape = args
     m = io.loadmat(fname)
-    x = m['dataStruct'][0][0][0]
+    try:
+        x = m['data']
+    except KeyError:
+        x = m['dataStruct'][0][0][0]  # I believe this was the structure for the original contest data
     if standardize:
         if standardize.startswith('sm'):
             x -= x.mean(axis=0)
@@ -33,7 +36,7 @@ STANDARDIZE_OPTIONS = ['sm', 'sm_file', 'sm_file_channelwise','file', 'file_chan
 # %% define Tensorflow Generator that provides examples and labels
 class TrainingGenerator(tf.keras.utils.Sequence):
     def __init__(self,
-                 filenames_csv_path,
+                 df_filenames_csv,
                  file_segment_length,
                  buffer_length=4000,
                  batch_size=1,
@@ -45,7 +48,7 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         # --- pass arguments ---
         self.batch_size = batch_size
         self.file_segment_length = file_segment_length
-        self.csv = pd.read_csv(filenames_csv_path)
+        self.csv = df_filenames_csv
         self.segm_length = 6000
         self.n_channels = 16
         self.samples_per_file = self.file_segment_length * 4  # draw 15 s segments
@@ -102,7 +105,11 @@ class TrainingGenerator(tf.keras.utils.Sequence):
 
         args = zip(fnames, labels, standardizes, shapes)
         for i in args:
-            self.pool.apply_async(data_loader, (i,), callback=self.buffer.enqueue_many)
+            self.pool.apply_async(data_loader, (i,), callback=self.buffer.enqueue_many, error_callback=self.data_loader_error_handler)
+
+    def data_loader_error_handler(self, err_msg):
+        print(err_msg)
+        raise RuntimeError
 
     def cleanup_buffer(self):
         if self.pool:
@@ -136,7 +143,7 @@ class TrainingGenerator(tf.keras.utils.Sequence):
     def __getitem__(self, index):
         if index == 0:
             self.on_epoch_start()
-
+        # wait until the buffer is filled before returning values, in order to ensure shuffeled batches
         while self.buffer.size() < self.buffer_length and not self.pool._taskqueue.empty():
             time.sleep(0.3)
 
