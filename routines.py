@@ -14,13 +14,30 @@ def get_csv(args):
         }
     else:
         csv = {
-            1: 'train_filenames_labels_patient{}_segment_length_{}.csv'.format(args.pat, args.file_segment_length),
-            2: 'validation_filenames_patient{}_segment_length_{}.csv'.format(args.pat, args.file_segment_length),
-            3: 'test_filenames_patient{}_segment_length_{}.csv'.format(args.pat, args.file_segment_length)
+            1: 'train_filenames_labels_patient{}_segment_length_{}.csv'.format(args.pat, args.segment_length_minutes),
+            2: 'validation_filenames_patient{}_segment_length_{}.csv'.format(args.pat, args.segment_length_minutes),
+            3: 'test_filenames_patient{}_segment_length_{}.csv'.format(args.pat, args.segment_length_minutes)
         }
 
     return Path(args.CSV) / csv[args.mode]
 
+def load_csv(args):
+    csv = pd.read_csv(get_csv(args))
+    try:
+        _ = csv['image']
+    except KeyError:
+        csv = csv.rename(columns={'image ': 'image'})  # handle inconsistent column naming in csv
+        print('renamed column')
+    # --- check, if data specified in csv are existent ---
+    for i, f in enumerate(csv['image']):
+        if not os.path.isfile(f):
+            # try path relative to csv as in the sample files
+            if os.path.isfile(os.path.join(args.CSV, f)):
+                csv.loc[i, 'image'] = os.path.join(args.CSV, f)
+            else:
+                raise FileNotFoundError('File {} from csv does not exist.'.format(f))
+
+    return csv
 
 def training(args):
     if not os.path.isfile(get_csv(args)):
@@ -32,7 +49,7 @@ def training(args):
     else:
         standardize_mode = None
 
-    df_filenames = pd.read_csv(get_csv(args))
+    df_filenames = load_csv(args)
 
     if args.run_on_contest_data:
         train_runs = [(df_filenames.loc[df_filenames['image'].str.contains('Pat{}'.format(i))], i) for i in range(1,4)]
@@ -43,7 +60,7 @@ def training(args):
     for df_filenames, patient in train_runs:
         print('Starting Training Patient {}...'.format(patient))
         dg = TrainingGenerator(df_filenames_csv=df_filenames,
-                               file_segment_length=args.segment_length_minutes,
+                               segment_length_minutes=args.segment_length_minutes,
                                buffer_length=4000,
                                batch_size=40,
                                n_workers=5,
@@ -57,27 +74,20 @@ def training(args):
                             use_multiprocessing=False,
                             verbose=1,
                             workers=0,
-                            epochs=1)
+                            epochs=50)
         print('training patient {} done'.format(patient))
         Path(args.model).mkdir(exist_ok=True)
         current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H-%M-%S")
-        pat = 'pat{}'.format(patient)
         if args.run_on_contest_data:
-            sl = sm = ''
-        else:
-            sl = '_{}min'.format(args.file_segment_length)
-            sm = '_sub{}'.format(args.subtract_mean)
-        model_file = '{}{}{}_model_weights.h5'.format(pat, sl, sm)
-        settings = os.path.join(args.model, '{}_{}_settings.txt'.format(current_time, pat))
-        logs = os.path.join(args.model, '{}_{}_logs.csv'.format(current_time, pat))
+            args.segment_length_minutes = 10,
+            args.subtract_mean = 1
+        model_file = 'model_dataset{}_pat{}_seg{}_subtract{}.h5'.format(args.run_on_contest_data,
+                                                                        patient,
+                                                                        args.segment_length_minutes,
+                                                                        args.subtract_mean)
         model_archive = os.path.join(args.model, model_file)
         print('Archiving model weights to ' + model_archive)
         model.save_weights(model_archive)
-        print('Archiving settings to ' + settings)
-        with open(settings, 'w') as s:
-            s.write(str(args))
-        print('Archiving training history to ' + logs)
-        pd.DataFrame(history.history).to_csv(logs)
 
 
 def evaluate(args):
@@ -87,7 +97,7 @@ def evaluate(args):
     else:
         standardize_mode = None
 
-    df_filenames = pd.read_csv(get_csv(args))
+    df_filenames = load_csv(args)
 
     if args.run_on_contest_data:
         dfs = [(df_filenames.loc[df_filenames['image'].str.contains('Pat{}'.format(i))], i) for i in range(1,4)]
@@ -103,7 +113,7 @@ def evaluate(args):
             sl = sm = ''
             args.segment_length_minutes = 10
         else:
-            sl = '_{}min'.format(args.file_segment_length)
+            sl = '_{}min'.format(args.segment_length_minutes)
             sm = '_sub{}'.format(args.subtract_mean)
         model_file = '{}{}{}_model_weights.h5'.format(pat, sl, sm)
 
@@ -117,7 +127,7 @@ def evaluate(args):
             raise FileNotFoundError('Please train model for specified options and patient before evaluating.')
 
         dg = EvaluationGenerator(df_filenames_csv=df_filenames,
-                                 file_segment_length=args.segment_length_minutes,
+                                 segment_length_minutes=args.segment_length_minutes,
                                  standardize_mode=standardize_mode,
                                  batch_size=10/args.segment_length_minutes * 40,
                                  class_weights=None)
@@ -150,7 +160,7 @@ def evaluate(args):
         fn = 'contest_data_solution_matthiasEb_mode{}.csv'.format(args.mode)
     else:
         fn = 'solution_matthiasEb_pat{}_seg{}_mode{}_subtract{}.csv'.format(args.pat,
-                                                                            args.file_segment_length,
+                                                                            args.segment_length_minutes,
                                                                             args.mode,
                                                                             args.subtract_mean)
     s.to_csv(os.path.join(args.solutions, fn), index=False)

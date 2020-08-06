@@ -13,9 +13,12 @@ def data_loader(args):
     fname, label, standardize, shape = args
     m = io.loadmat(fname)
     try:
-        x = m['data']
+        x = m['data']  # this is for the ecosystem data
     except KeyError:
-        x = m['dataStruct'][0][0][0]  # I believe this was the structure for the original contest data
+        try:
+            x = m['Data']  # this seems to be the continuous data
+        except KeyError:
+            x = m['dataStruct'][0][0][0]  # I believe this was the structure for the original contest data
     if standardize:
         if standardize.startswith('sm'):
             x -= x.mean(axis=0)
@@ -37,7 +40,7 @@ STANDARDIZE_OPTIONS = ['sm', 'sm_file', 'sm_file_channelwise','file', 'file_chan
 class TrainingGenerator(tf.keras.utils.Sequence):
     def __init__(self,
                  df_filenames_csv,
-                 file_segment_length,
+                 segment_length_minutes,
                  buffer_length=4000,
                  batch_size=1,
                  shuffle=True,
@@ -47,11 +50,11 @@ class TrainingGenerator(tf.keras.utils.Sequence):
 
         # --- pass arguments ---
         self.batch_size = batch_size
-        self.file_segment_length = file_segment_length
+        self.segment_length_minutes = segment_length_minutes
         self.csv = df_filenames_csv
         self.segm_length = 6000
         self.n_channels = 16
-        self.samples_per_file = self.file_segment_length * 4  # draw 15 s segments
+        self.samples_per_file = self.segment_length_minutes * 4  # draw 15 s segments
         if standardize_mode not in STANDARDIZE_OPTIONS:
             raise ValueError("'standardize_mode' hast to be one of {}.".format(STANDARDIZE_OPTIONS))
         self.standardize=standardize_mode
@@ -173,68 +176,3 @@ class EvaluationGenerator(TrainingGenerator):
         shape = (-1, self.segm_length, self.n_channels, 1)
         x, _ = data_loader((fname, 0, self.standardize, shape))
         return x
-
-# %% execute only if run as a script
-if __name__ == '__main__':
-    # %% provide inputs
-    fn = '/home/s4238870/code/neurovista_evaluation/sample.csv'
-    sl = 10  # segment length in minutes
-    test_normalize = True
-    test_epoch = True
-    test_data = True
-    # %% instantiate SegmentGenerator
-    bs = 40
-    if test_normalize:
-        for run, sm in enumerate(STANDARDIZE_OPTIONS):
-            print('\n\n=== Standardization mode: {} ==='.format(sm))
-            gen = TrainingGenerator(fn,
-                                    sl,
-                                    shuffle=True,
-                                    standardize_mode=sm,
-                                    batch_size=bs)
-            k = []
-            batch = np.empty(1)
-            if run == 0:
-                print('Generating 10 batches...')
-            for i in range(len(gen)):
-                batch = gen[i]
-                k.append(batch)
-            if run == 0:
-                print('First Batch shape: {}'.format(k[0][0].shape))
-                print('Last Batch shape: {}'.format(k[-1][0].shape))
-            X = np.concatenate([x[0] for x in k], axis=0)
-            if run == 0:
-                print('Data shape: {}'.format(X.shape))
-            X = X.squeeze()
-            print('\n----channelwise----')
-            print('STD: {}'.format(X.std(-2).mean(axis=tuple([i for i in range(X.ndim - 2)]))))
-            print('MEAN: {}'.format(X.mean(-2).mean(axis=tuple([i for i in range(X.ndim - 2)]))))
-
-            print('\n----total----')
-            print('STD: {}'.format(X.std(-2).mean()))
-            print('MEAN: {}'.format(X.mean()))
-
-    if test_epoch:
-        gen = TrainingGenerator(fn,
-                                sl,
-                                shuffle=True,
-                                standardize_mode='file_channelwise',
-                                batch_size=bs)
-        for epoch in range(10):
-            print('Epoch: {}'.format(epoch))
-            for i in range(len(gen)):
-                X = gen[i]
-            gen.on_epoch_end()
-
-    if test_data:
-        gen = TrainingGenerator(fn,
-                                sl,
-                                shuffle=False,
-                                standardize_mode=None,
-                                batch_size=bs)
-        for i in range(len(gen)):
-            x, y, z = gen[i]
-            m = io.loadmat(gen.csv.iloc[i]['image'])['dataStruct'][0][0][0]
-            assert np.array_equal(x.numpy().reshape(m.shape), m)
-
-    print('test passed.')
