@@ -14,14 +14,18 @@ def main():
     with open('SETTINGS.json') as f:
         json_dict = json.load(f)
 
-    print(json_dict)
     args = Namespace(json_dict)
+
+    if args.run_on_contest_data:
+        args.segment_length_minutes = 10
+        args.subtract_mean = 1
+
+    print(args)
 
     # run training
     if args.mode == 1:
         routines.training(args)
-        if args.run_on_contest_data:
-            routines.evaluate(args)
+        routines.evaluate(args)
     else:
         routines.evaluate(args)
 

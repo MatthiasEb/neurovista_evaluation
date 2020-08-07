@@ -1,5 +1,5 @@
 {
-"run_on_contest_data": 0,
+"run_on_contest_data": 1,
 "mode": 1,
 "pat": 1,
 "segment_length_minutes": 10,

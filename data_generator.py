@@ -7,28 +7,52 @@ import pandas as pd
 from multiprocessing import Pool
 import time
 import warnings
+import h5py
 
 # define different pipeline stages
-def data_loader(args):
-    fname, label, standardize, shape = args
-    m = io.loadmat(fname)
-    try:
-        x = m['data']  # this is for the ecosystem data
-    except KeyError:
+def data_loader(loader_args):
+    # raise ValueError
+    fname, label, standardize, shape, segment_length_minutes = loader_args
+    if segment_length_minutes == 10:
+        m = io.loadmat(fname)
         try:
-            x = m['Data']  # this seems to be the continuous data
+            x = m['data']  # this is for the ecosystem data
         except KeyError:
-            x = m['dataStruct'][0][0][0]  # I believe this was the structure for the original contest data
+            try:
+                x = m['Data']  # this seems to be the continuous data
+            except KeyError:
+                x = m['dataStruct'][0][0][0]  # I believe this was the structure for the original contest data
+
+    elif segment_length_minutes == 1:
+        with h5py.File(fname, 'r') as f:
+            x = np.array(f['Data'])
+        x = x.T
+
+    else:
+        raise ValueError
+
+    x = np.nan_to_num(x, copy=False)
+
     if standardize:
         if standardize.startswith('sm'):
             x -= x.mean(axis=0)
         if standardize.endswith('file'):
             x -= x.mean()
-            x /= (x.std() + np.finfo(np.float32).eps)
+            std = x.std()
+            if std:
+                x /= std
         elif standardize.endswith('file_channelwise'):
             x -= x.mean(axis=0)
-            x /= (x.std(axis=0) + np.finfo(np.float32).eps)
-    x = x.reshape(shape)
+            std = x.std(axis=0)
+            x[:,std.astype(bool)] /= std[std.astype(bool)]
+
+    # resegment to 15 s segments
+    try:
+        x = x.reshape(shape)
+    except ValueError:
+        # if sequence is sampled with odd frequency, last segment will overlap a little with second-last segment
+        x = np.concatenate([x[:x.shape[0]//shape[1]*shape[1]], x[-shape[1]:]])
+        x = x.reshape(shape)
     y = np.ones(x.shape[0]) * label
     return x.astype('float32'), y.astype('int16')
 
@@ -85,6 +109,7 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         self.n_workers = n_workers
         self.buffer = None
         self.pool = None
+        self.pool_result = None
         self.setup_buffer()
         self.on_epoch_end()
 
@@ -105,20 +130,29 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         fnames = self.csv['image']
         shapes = ((-1, self.segm_length, self.n_channels, 1) for i in range(len(fnames)))
         standardizes = (self.standardize for i in range(len(fnames)))
+        segment_legnth_minutes = (self.segment_length_minutes for i in range(len(fnames)))
 
-        args = zip(fnames, labels, standardizes, shapes)
-        for i in args:
-            self.pool.apply_async(data_loader, (i,), callback=self.buffer.enqueue_many, error_callback=self.data_loader_error_handler)
+        loader_args = zip(fnames, labels, standardizes, shapes, segment_legnth_minutes)
+        for i in loader_args:
+            self.pool_result = self.pool.apply_async(data_loader, (i,), callback=self.data_loader_callback, error_callback=self.data_loader_error_handler)
+
+
+    def data_loader_callback(self, data):
+        try:
+            self.buffer.enqueue_many(data)
+        except Exception as e:  # queue is closed: do nothing, wait for cleanup
+            pass
 
     def data_loader_error_handler(self, err_msg):
         print(err_msg)
         raise RuntimeError
 
     def cleanup_buffer(self):
+        if not self.buffer.is_closed():
+            self.buffer.close(cancel_pending_enqueues=True)
         if self.pool:
             if self.buffer.size():
                 _ = self.buffer.dequeue_up_to(self.buffer_length)  # flush queue
-
             self.pool.terminate()  # cleanup processes
             self.pool.join()
             self.pool = None
@@ -132,8 +166,7 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         assert self.buffer.size() == 0
 
         if self.pool:
-            assert self.pool._taskqueue.empty()
-            self.cleanup_buffer()
+            assert self.pool_result.ready()
 
     def on_epoch_start(self):
         self.cleanup_buffer()
@@ -147,18 +180,24 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         if index == 0:
             self.on_epoch_start()
         # wait until the buffer is filled before returning values, in order to ensure shuffeled batches
-        while self.buffer.size() < self.buffer_length and not self.pool._taskqueue.empty():
+        while self.buffer.size() < self.buffer_length and not self.pool_result.ready():
             time.sleep(0.3)
 
+        # if all jobs are done and buffer is not closed already, close it
+        if self.pool_result.ready() and not self.buffer.is_closed():
+            self.buffer.close(cancel_pending_enqueues=False)
+
         x, y = self.buffer.dequeue_up_to(self.batch_size)
-        if index == len(self) - 1:
+
+        if self.buffer.size == 0:
             self.on_epoch_end()
+
         if self.class_weights is None:
             return x, y
         else:
             sw = np.zeros(y.shape)
-            sw[y == 0] = self.class_weights[0]
-            sw[y == 1] = self.class_weights[1]
+            sw[(y==0).numpy()] = self.class_weights[0]
+            sw[(y==1).numpy()] = self.class_weights[1]
             return x, y, sw
 
 class EvaluationGenerator(TrainingGenerator):
@@ -174,5 +213,5 @@ class EvaluationGenerator(TrainingGenerator):
     def __getitem__(self, item):
         fname = self.csv['image'].iloc[item]
         shape = (-1, self.segm_length, self.n_channels, 1)
-        x, _ = data_loader((fname, 0, self.standardize, shape))
+        x, _ = data_loader((fname, 0, self.standardize, shape, self.segment_length_minutes))
         return x

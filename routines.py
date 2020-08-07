@@ -21,6 +21,7 @@ def get_csv(args):
 
     return Path(args.CSV) / csv[args.mode]
 
+
 def load_csv(args):
     csv = pd.read_csv(get_csv(args))
     try:
@@ -39,12 +40,13 @@ def load_csv(args):
 
     return csv
 
+
 def training(args):
     if not os.path.isfile(get_csv(args)):
         raise FileNotFoundError(
             'CSV file not found: {}'.format(get_csv(args)))
 
-    if args.subtract_mean and not args.run_on_contest_data:
+    if args.subtract_mean:
         standardize_mode = 'file_channelwise'
     else:
         standardize_mode = None
@@ -52,8 +54,7 @@ def training(args):
     df_filenames = load_csv(args)
 
     if args.run_on_contest_data:
-        train_runs = [(df_filenames.loc[df_filenames['image'].str.contains('Pat{}'.format(i))], i) for i in range(1,4)]
-        args.segment_length_minutes = 10
+        train_runs = [(df_filenames.loc[df_filenames['image'].str.contains('Pat{}'.format(i))], i) for i in range(1, 4)]
     else:
         train_runs = [(df_filenames, args.pat)]
 
@@ -69,15 +70,14 @@ def training(args):
 
         model = nv1x16()
 
-        history = model.fit(x=dg,
-                            shuffle=False,  # do not change these settings!
-                            use_multiprocessing=False,
-                            verbose=1,
-                            workers=0,
-                            epochs=50)
+        model.fit(x=dg,
+                  shuffle=False,  # do not change these settings!
+                  use_multiprocessing=False,
+                  verbose=1,
+                  workers=0,
+                  epochs=50)
         print('training patient {} done'.format(patient))
         Path(args.model).mkdir(exist_ok=True)
-        current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H-%M-%S")
         if args.run_on_contest_data:
             args.segment_length_minutes = 10,
             args.subtract_mean = 1
@@ -100,7 +100,7 @@ def evaluate(args):
     df_filenames = load_csv(args)
 
     if args.run_on_contest_data:
-        dfs = [(df_filenames.loc[df_filenames['image'].str.contains('Pat{}'.format(i))], i) for i in range(1,4)]
+        dfs = [(df_filenames.loc[df_filenames['image'].str.contains('Pat{}'.format(i))], i) for i in range(1, 4)]
     else:
         dfs = [(df_filenames, args.pat)]
 
@@ -108,14 +108,10 @@ def evaluate(args):
     for df_filenames, patient in dfs:
         print('Starting Evaluation for Patient {}...'.format(patient))
 
-        pat = 'pat{}'.format(patient)
-        if args.run_on_contest_data:
-            sl = sm = ''
-            args.segment_length_minutes = 10
-        else:
-            sl = '_{}min'.format(args.segment_length_minutes)
-            sm = '_sub{}'.format(args.subtract_mean)
-        model_file = '{}{}{}_model_weights.h5'.format(pat, sl, sm)
+        model_file = 'model_dataset{}_pat{}_seg{}_subtract{}.h5'.format(args.run_on_contest_data,
+                                                                        patient,
+                                                                        args.segment_length_minutes,
+                                                                        args.subtract_mean)
 
         model = nv1x16()
         model_path = os.path.join(args.model, model_file)
@@ -129,7 +125,7 @@ def evaluate(args):
         dg = EvaluationGenerator(df_filenames_csv=df_filenames,
                                  segment_length_minutes=args.segment_length_minutes,
                                  standardize_mode=standardize_mode,
-                                 batch_size=10/args.segment_length_minutes * 40,
+                                 batch_size=args.segment_length_minutes * 4,
                                  class_weights=None)
 
         probs = model.predict(dg, verbose=0)
@@ -164,6 +160,5 @@ def evaluate(args):
                                                                             args.mode,
                                                                             args.subtract_mean)
     s.to_csv(os.path.join(args.solutions, fn), index=False)
-
 
     print('Evaluation done')
