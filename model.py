@@ -17,12 +17,12 @@ def nv1x16(n_kernels=128):
 
     model.add(tf.keras.layers.Conv2D(filters=n_kernels // 4,
                                      kernel_size=(5, 1),
-                                     strides=(5, 1),
                                      padding='same',
                                      kernel_regularizer=tf.keras.regularizers.l1_l2(l1, l2)
                                      ))
     model.add(tf.keras.layers.BatchNormalization())
     tf.keras.layers.LeakyReLU(0.2)
+    model.add(tf.keras.layers.MaxPooling2D((5, 1)))
     model.add(tf.keras.layers.Dropout(.2))
 
     model.add(tf.keras.layers.Conv2D(filters=n_kernels // 2,

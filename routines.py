@@ -73,14 +73,11 @@ def training(args):
         model.fit(x=dg,
                   shuffle=False,  # do not change these settings!
                   use_multiprocessing=False,
-                  verbose=1,
+                  verbose=2,
                   workers=0,
                   epochs=50)
         print('training patient {} done'.format(patient))
         Path(args.model).mkdir(exist_ok=True)
-        if args.run_on_contest_data:
-            args.segment_length_minutes = 10,
-            args.subtract_mean = 1
         model_file = 'model_dataset{}_pat{}_seg{}_subtract{}.h5'.format(args.run_on_contest_data,
                                                                         patient,
                                                                         args.segment_length_minutes,
