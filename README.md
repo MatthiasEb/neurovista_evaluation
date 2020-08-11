@@ -1,7 +1,10 @@
 # neurovista_evaluation
-code for evaluation on full neurovista trial data according to specifications from 6.2.2020.
+code for evaluation on full neurovista trial data following the [instructions](https://github.com/epilepsyecosystem/CodeEvaluationDocs) (commit 20e6f0f, dated 16/06/2020). 
 
-## Using Python
+## Settings
+Settings can be adjusted in SETTINGS.json
+
+## Using a virtual environment
 ### requirements
 1. python3
 2. cuda toolbox 10, nvidia-drivers
@@ -11,12 +14,11 @@ Install requirements by running:
 
 `pip install -r requirements.txt`
 
-I'd recommend using a virtual environment for this.
 
 ### execution
 Run training by executing:
 
-`python run.py -gpu GPU_DEVICE --mode 1 --patient PATIENT`
+`python run.py`
 
 ## Using Docker
 ### requirements
@@ -28,7 +30,7 @@ Build Docker Image by running:
 `docker build --tag nv1x16_eval .`
 
 ### Execution
-Specify (any) root directory of your data segments by
+Specify the directory of your data segments by
 
 `export DATA_DIR=YOUR_DATA_DIRECTORY`,
 
@@ -36,51 +38,32 @@ replacing `YOUR_DATA_DIRECTORY` with your specific directory.
 
 Run training by executing
 
-`docker run --gpus 1 -v $PWD:/code -v /$DATA_DIR:/$DATA_DIR:ro nv1x16_eval python ./run.py -gpu 0 --mode 1 -p PATIENT`
+`docker run --gpus 1 -v $PWD:/code -v /$DATA_DIR:/$DATA_DIR:ro nv1x16_eval python ./run.py`
 
-## options and remarks
-For detailed options, run:
+## Using Singularity
 
-`python run.py -h`
+Singularity recipe is included. SingularityHub URI of the Image is MatthiasEb/neurovista_evaluation:nv_eval.
 
-The .csv files containing the paths of the segments (and targets for training) are expected to be in 
-the current working directory if not specified by the argument
+## Remarks
 
-`--path PATH_TO_CSV`
+I ran with run_on_contest_data=1, the results seemed to be comparable to the version on the ecosystem leaderboard. 
+Sparse tests with run_on_contest_data=0 have been executed, maybe there is something I missed here. 
+I did not yet try to run it within a singularity container, docker should work though.
+Do not hesitate to contact me if you run into problems, have any questions or remarks.
 
-For approximate reproducing the results from the paper (not exactly possible due to different 
-training process) execute:
+### Algorithm
+This is a pretty naive approach on a 2D-Convolution Deep Neural Network on the raw time series. 
+As described in the [paper](https://ieeexplore.ieee.org/abstract/document/8621225), the Network expects standardized 15 s segments, sampeled at 200 Hz. 
+tensorflow.keras (2.0.1) was used as Deep Learning API. 
+In order to avoid the need to either load the whole training set at once or to save the preprocessed time series, this is a slightly different implementation than the one used in the paper. 
+Loading the original .mat files, standardizing (optionally, if `subtract_mean==1`), splitting them in 15 s segments and subsequently shuffling the data is (hopefully) done asynchronously on the fly by the dataloader. 
+If the IO-Bandwidth of the filesystem is large enough, this should not pose the bottleneck during training. 
+Subsampling is implemented as an AveragePooling Input Layer in the network. 
 
-`python run.py -gpu GPU_DEVICE --mode 1 -p PATIENT`
+As described in the paper, if run_on_contest_data, 3 networks (one for each patient) is trained and evaluated separately. 
+Subsequently, the solution file is concatenated.
 
-to train the model. Warning: Displayed metrics that cannot be calculated accumulatively (roc_auc, 
-precision, recall, pr_auc) are only batch-wise approximations. 
 
-Depending on Hardware, you may want or have to change batchsize by specifying argument
-
-`--batch_size BATCH_SIZE`
-
-Then you can validate it with
-
-`python run.py --mode 2 --patient PATIENT`
-
-Testing works accordingliy.
-
-Validation/Testing can also be done on gpu if you specify a device. I did not yet constrain the
-implementation to run only single-threaded or measure maximum ram used during evaluation. 
-
-Length of the file segments can be specified with option `-l 1` or `l 10 (default)`, subtract mean can 
-switched on by adding `-sm (default off)`. Should not make any difference though, since data is standardized
-anyways in training procedure.
-
-All models, training logs and settings are saved in the `archive` directory. If you do not specify any 
-model when testing using `--model_file MODEL_FILE`, last model that was trained with the given evaluation 
-settings (segment length, subtract_mean, patient) will be evaluated.
-
-Since I could not test it in the original setup with the original csv files and data, it is possible
-that there are bugs that I did not think of at this point.
-
-Do not hesitate to contact me if you have any questions or remarks.
 
 
 
