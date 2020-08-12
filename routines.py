@@ -72,9 +72,9 @@ def training(args):
 
         model.fit(x=dg,
                   shuffle=False,  # do not change these settings!
-                  use_multiprocessing=False,
+                  use_multiprocessing=True,
                   verbose=2,
-                  workers=0,
+                  workers=4,
                   epochs=50)
         print('training patient {} done'.format(patient))
         Path(args.model).mkdir(exist_ok=True)

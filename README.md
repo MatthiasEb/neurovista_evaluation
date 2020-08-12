@@ -46,21 +46,29 @@ Singularity recipe is included. SingularityHub URI of the Image is MatthiasEb/ne
 
 ## Remarks
 
-I ran with run_on_contest_data=1, the results seemed to be comparable to the version on the ecosystem leaderboard. 
+You should use a GPU for training. I used an RTX 2080 Ti, run_on_contest_data=1, mode=1 took about 4.5 h.
+If you use a GPU with much less RAM, you might have to reduce the batch size, I did not try that though.
+I ran the code with run_on_contest_data=1, the results seemed to be comparable to the version on the ecosystem leaderboard. 
 Sparse tests with run_on_contest_data=0 have been executed, maybe there is something I missed here. 
 I did not yet try to run it within a singularity container, docker should work though.
 Do not hesitate to contact me if you run into problems, have any questions or remarks.
 
 ### Algorithm
-This is a pretty naive approach on a 2D-Convolution Deep Neural Network on the raw time series. 
+This is a pretty naive approach on a 2D-Convolution Deep Neural Network, applied to the raw time series. 
 As described in the [paper](https://ieeexplore.ieee.org/abstract/document/8621225), the Network expects standardized 15 s segments, sampeled at 200 Hz. 
 tensorflow.keras (2.0.1) was used as Deep Learning API. 
-In order to avoid the need to either load the whole training set at once or to save the preprocessed time series, this is a slightly different implementation than the one used in the paper. 
-Loading the original .mat files, standardizing (optionally, if `subtract_mean==1`), splitting them in 15 s segments and subsequently shuffling the data is (hopefully) done asynchronously on the fly by the dataloader. 
-If the IO-Bandwidth of the filesystem is large enough, this should not pose the bottleneck during training. 
-Subsampling is implemented as an AveragePooling Input Layer in the network. 
+In order to avoid the need to either load the whole training set at once or to save the preprocessed time series, this is a different implementation than the one used in the paper.
+At the time of this writing, this code does not really reproduce the results shown in the paper. I'll try to improve this issue.
 
-As described in the paper, if run_on_contest_data, 3 networks (one for each patient) is trained and evaluated separately. 
+### Implementation
+Loading the original (~ 400 Hz) .mat files, standardizing (optionally, if `subtract_mean==1`), splitting them in 15 s segments is (hopefully) done asynchronously on the fly by the dataloader in forked processes.
+Subsampling is implemented as an AveragePooling Input Layer in the network. 
+The 15s Segments are then enqueued in a buffer with the size of 100 10-min-sequences, implemented as a tf.queue.RandomShuffleQueue.
+The data is therefore dequeued in random order.
+The intention of this procedure was to ensure a reasonably shuffeled training set of 15 s segments while minimizing IO, working on the .mat files and having the possibility for standardization.  
+If the IO-Bandwidth of the filesystem is reasonably high, this should not pose the bottleneck during training but the GPU. 
+
+As described in the paper, if run_on_contest_data, 3 networks (one for each patient) are trained and evaluated individually. 
 Subsequently, the solution file is concatenated.
 
 

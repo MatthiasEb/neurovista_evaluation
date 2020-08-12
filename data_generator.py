@@ -148,14 +148,15 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         raise RuntimeError
 
     def cleanup_buffer(self):
-        if not self.buffer.is_closed():
+        if self.buffer:
             self.buffer.close(cancel_pending_enqueues=True)
-        if self.pool:
             if self.buffer.size():
                 _ = self.buffer.dequeue_up_to(self.buffer_length)  # flush queue
+        if self.pool:
             self.pool.terminate()  # cleanup processes
-            self.pool.join()
-            self.pool = None
+            self.pool.close()
+        self.pool = None
+        self.buffer = None
 
     def on_epoch_end(self):
         if self.shuffle:
@@ -167,6 +168,8 @@ class TrainingGenerator(tf.keras.utils.Sequence):
 
         if self.pool:
             assert self.pool_result.ready()
+
+        self.cleanup_buffer()
 
     def on_epoch_start(self):
         self.cleanup_buffer()
@@ -189,7 +192,7 @@ class TrainingGenerator(tf.keras.utils.Sequence):
 
         x, y = self.buffer.dequeue_up_to(self.batch_size)
 
-        if self.buffer.size == 0:
+        if index == len(self)-1:
             self.on_epoch_end()
 
         if self.class_weights is None:
