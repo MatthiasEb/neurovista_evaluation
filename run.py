@@ -19,6 +19,7 @@ def main():
     if args.run_on_contest_data:
         args.segment_length_minutes = 10
         args.subtract_mean = 1
+        args.pat = '1-3'
 
     print(args)
 

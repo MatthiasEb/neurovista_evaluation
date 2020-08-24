@@ -1,7 +1,7 @@
 from pathlib import Path
 from data_generator import TrainingGenerator, EvaluationGenerator
 from model import nv1x16
-import datetime, os
+import os
 import pandas as pd
 from sklearn.metrics import roc_auc_score, average_precision_score, precision_score, recall_score, accuracy_score
 
@@ -158,4 +158,5 @@ def evaluate(args):
                                                                             args.subtract_mean)
     s.to_csv(os.path.join(args.solutions, fn), index=False)
 
+    print('Saving solution file to : {}'.format(os.path.join(args.solutions, fn)))
     print('Evaluation done')

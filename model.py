@@ -68,7 +68,6 @@ def nv1x16(n_kernels=128):
     model.add(tf.keras.layers.Flatten())
     model.add(tf.keras.layers.Dropout(.5))
     model.add(tf.keras.layers.Dense(64, kernel_regularizer=tf.keras.regularizers.l1_l2(l1, l2)))
-    model.add(tf.keras.layers.BatchNormalization())
     model.add(tf.keras.layers.LeakyReLU(0.2))
     model.add(tf.keras.layers.Dense(1, activation='sigmoid'))
 
