@@ -9,6 +9,7 @@ import time
 import warnings
 import h5py
 
+
 # define different pipeline stages
 def data_loader(loader_args):
     # raise ValueError
@@ -44,20 +45,21 @@ def data_loader(loader_args):
         elif standardize.endswith('file_channelwise'):
             x -= x.mean(axis=0)
             std = x.std(axis=0)
-            x[:,std.astype(bool)] /= std[std.astype(bool)]
+            x[:, std.astype(bool)] /= std[std.astype(bool)]
 
     # resegment to 15 s segments
     try:
         x = x.reshape(shape)
     except ValueError:
         # if sequence is sampled with odd frequency, last segment will overlap a little with second-last segment
-        x = np.concatenate([x[:x.shape[0]//shape[1]*shape[1]], x[-shape[1]:]])
+        x = np.concatenate([x[:x.shape[0] // shape[1] * shape[1]], x[-shape[1]:]])
         x = x.reshape(shape)
     y = np.ones(x.shape[0]) * label
     return x.astype('float32'), y.astype('int16')
 
+
 # define several possible standardization methods
-STANDARDIZE_OPTIONS = ['sm', 'sm_file', 'sm_file_channelwise','file', 'file_channelwise', None]
+STANDARDIZE_OPTIONS = ['sm', 'sm_file', 'sm_file_channelwise', 'file', 'file_channelwise', None]
 
 
 # %% define Tensorflow Generator that provides examples and labels
@@ -81,7 +83,7 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         self.samples_per_file = self.segment_length_minutes * 4  # draw 15 s segments
         if standardize_mode not in STANDARDIZE_OPTIONS:
             raise ValueError("'standardize_mode' hast to be one of {}.".format(STANDARDIZE_OPTIONS))
-        self.standardize=standardize_mode
+        self.standardize = standardize_mode
 
         self.shape = (len(self.csv) * self.samples_per_file, self.segm_length, self.n_channels)
         self.shuffle = shuffle
@@ -126,16 +128,19 @@ class TrainingGenerator(tf.keras.utils.Sequence):
 
     def setup_buffer_pipeline(self):
         self.pool = Pool(processes=self.n_workers)
-        labels = self.csv['class'].astype('int16')
-        fnames = self.csv['image']
+        idx = np.arange(len(self.csv))
+        if self.shuffle:
+            np.random.shuffle(idx)
+        labels = self.csv['class'].astype('int16')[idx]
+        fnames = self.csv['image'][idx]
         shapes = ((-1, self.segm_length, self.n_channels, 1) for i in range(len(fnames)))
         standardizes = (self.standardize for i in range(len(fnames)))
         segment_legnth_minutes = (self.segment_length_minutes for i in range(len(fnames)))
 
         loader_args = zip(fnames, labels, standardizes, shapes, segment_legnth_minutes)
         for i in loader_args:
-            self.pool_result = self.pool.apply_async(data_loader, (i,), callback=self.data_loader_callback, error_callback=self.data_loader_error_handler)
-
+            self.pool_result = self.pool.apply_async(data_loader, (i,), callback=self.data_loader_callback,
+                                                     error_callback=self.data_loader_error_handler)
 
     def data_loader_callback(self, data):
         try:
@@ -192,27 +197,32 @@ class TrainingGenerator(tf.keras.utils.Sequence):
 
         x, y = self.buffer.dequeue_up_to(self.batch_size)
 
-        if index == len(self)-1:
+        if index == len(self) - 1:
             self.on_epoch_end()
 
         if self.class_weights is None:
             return x, y
         else:
             sw = np.zeros(y.shape)
-            sw[(y==0).numpy()] = self.class_weights[0]
-            sw[(y==1).numpy()] = self.class_weights[1]
+            sw[(y == 0).numpy()] = self.class_weights[0]
+            sw[(y == 1).numpy()] = self.class_weights[1]
             return x, y, sw
+
 
 class EvaluationGenerator(TrainingGenerator):
 
     def setup_buffer(self):
         pass
+
     def setup_buffer_pipeline(self):
         pass
+
     def on_epoch_end(self):
         pass
+
     def on_epoch_start(self):
         pass
+
     def __getitem__(self, item):
         fname = self.csv['image'].iloc[item]
         shape = (-1, self.segm_length, self.n_channels, 1)
