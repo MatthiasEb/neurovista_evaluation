@@ -62,7 +62,7 @@ def training(args):
         print('Starting Training Patient {}...'.format(patient))
         dg = TrainingGenerator(df_filenames_csv=df_filenames,
                                segment_length_minutes=args.segment_length_minutes,
-                               buffer_length=4000,
+                               buffer_length=16000,
                                batch_size=40,
                                n_workers=5,
                                standardize_mode=standardize_mode,

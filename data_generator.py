@@ -133,9 +133,9 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         fnames = data_files['image']
         shapes = ((-1, self.segm_length, self.n_channels, 1) for i in range(len(fnames)))
         standardizes = (self.standardize for i in range(len(fnames)))
-        segment_legnth_minutes = (self.segment_length_minutes for i in range(len(fnames)))
+        segment_length_minutes = (self.segment_length_minutes for i in range(len(fnames)))
 
-        loader_args = zip(fnames, labels, standardizes, shapes, segment_legnth_minutes)
+        loader_args = zip(fnames, labels, standardizes, shapes, segment_length_minutes)
         self.pool_result = [self.pool.submit(self.data_enqueuer, i) for i in loader_args]
 
     def data_enqueuer(self, args):
