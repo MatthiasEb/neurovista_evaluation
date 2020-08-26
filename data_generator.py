@@ -3,8 +3,7 @@
 import tensorflow as tf
 import numpy as np
 import scipy.io as io
-import pandas as pd
-from multiprocessing import Pool
+from concurrent.futures import ThreadPoolExecutor
 import time
 import warnings
 import h5py
@@ -112,8 +111,6 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         self.buffer = None
         self.pool = None
         self.pool_result = None
-        self.setup_buffer()
-        self.on_epoch_end()
 
     def setup_buffer(self):
         if self.shuffle:
@@ -127,22 +124,23 @@ class TrainingGenerator(tf.keras.utils.Sequence):
                                              shapes=[(self.segm_length, self.n_channels, 1), ()])
 
     def setup_buffer_pipeline(self):
-        self.pool = Pool(processes=self.n_workers)
-        idx = np.arange(len(self.csv))
+        self.pool = ThreadPoolExecutor(max_workers=self.n_workers)
         if self.shuffle:
-            np.random.shuffle(idx)
-        labels = self.csv['class'].astype('int16')[idx]
-        fnames = self.csv['image'][idx]
+            data_files = self.csv.sample(frac=1).reset_index(drop=True)
+        else:
+            data_files = self.csv
+        labels = data_files['class'].astype('int16')
+        fnames = data_files['image']
         shapes = ((-1, self.segm_length, self.n_channels, 1) for i in range(len(fnames)))
         standardizes = (self.standardize for i in range(len(fnames)))
         segment_legnth_minutes = (self.segment_length_minutes for i in range(len(fnames)))
 
         loader_args = zip(fnames, labels, standardizes, shapes, segment_legnth_minutes)
-        for i in loader_args:
-            self.pool_result = self.pool.apply_async(data_loader, (i,), callback=self.data_loader_callback,
-                                                     error_callback=self.data_loader_error_handler)
+        self.pool_result = [self.pool.submit(self.data_enqueuer, i) for i in loader_args]
 
-    def data_loader_callback(self, data):
+    def data_enqueuer(self, args):
+        data = data_loader(args)
+
         try:
             self.buffer.enqueue_many(data)
         except Exception as e:  # queue is closed: do nothing, wait for cleanup
@@ -158,21 +156,17 @@ class TrainingGenerator(tf.keras.utils.Sequence):
             if self.buffer.size():
                 _ = self.buffer.dequeue_up_to(self.buffer_length)  # flush queue
         if self.pool:
-            self.pool.terminate()  # cleanup processes
-            self.pool.close()
+            self.pool.shutdown(wait=True)
         self.pool = None
+        self.pool_result = None
         self.buffer = None
 
     def on_epoch_end(self):
-        if self.shuffle:
-            idx = np.arange(len(self.csv))
-            np.random.shuffle(idx)
-            self.csv = self.csv.iloc[idx]
-        # check, if we have run through the whole dataset
+        # check if we have run through the whole dataset
         assert self.buffer.size() == 0
 
         if self.pool:
-            assert self.pool_result.ready()
+            assert np.all([f.done() for f in self.pool_result])
 
         self.cleanup_buffer()
 
@@ -188,11 +182,11 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         if index == 0:
             self.on_epoch_start()
         # wait until the buffer is filled before returning values, in order to ensure shuffeled batches
-        while self.buffer.size() < self.buffer_length and not self.pool_result.ready():
+        while self.buffer.size() < self.buffer_length and not np.all([f.done() for f in self.pool_result]):
             time.sleep(0.3)
 
         # if all jobs are done and buffer is not closed already, close it
-        if self.pool_result.ready() and not self.buffer.is_closed():
+        if np.all([f.done() for f in self.pool_result]) and not self.buffer.is_closed():
             self.buffer.close(cancel_pending_enqueues=False)
 
         x, y = self.buffer.dequeue_up_to(self.batch_size)
@@ -228,3 +222,72 @@ class EvaluationGenerator(TrainingGenerator):
         shape = (-1, self.segm_length, self.n_channels, 1)
         x, _ = data_loader((fname, 0, self.standardize, shape, self.segment_length_minutes))
         return x
+
+# %% execute only if run as a script
+if __name__ == '__main__':
+    # %% provide inputs
+    import pandas as pd
+    fn = '/home/s4238870/code/neurovista_evaluation/CSV/contest_train_data_labels.csv'
+    fn = pd.read_csv(fn)
+    fn = fn[:10]
+    sl = 10  # segment length in minutes
+    test_normalize = True
+    test_epoch = True
+    test_data = True
+    # %% instantiate SegmentGenerator
+    bs = 40
+    if test_normalize:
+        for run, sm in enumerate(STANDARDIZE_OPTIONS):
+            print('\n\n=== Standardization mode: {} ==='.format(sm))
+            gen = TrainingGenerator(fn,
+                                    sl,
+                                    shuffle=True,
+                                    standardize_mode=sm,
+                                    batch_size=bs)
+            k = []
+            batch = np.empty(1)
+            if run == 0:
+                print('Generating 10 batches...')
+            for i in range(len(gen)):
+                batch = gen[i]
+                k.append(batch)
+            if run == 0:
+                print('First Batch shape: {}'.format(k[0][0].shape))
+                print('Last Batch shape: {}'.format(k[-1][0].shape))
+            X = np.concatenate([x[0] for x in k], axis=0)
+            if run == 0:
+                print('Data shape: {}'.format(X.shape))
+            X = X.squeeze()
+            print('\n----channelwise----')
+            print('STD: {}'.format(X.std(-2).mean(axis=tuple([i for i in range(X.ndim - 2)]))))
+            print('MEAN: {}'.format(X.mean(-2).mean(axis=tuple([i for i in range(X.ndim - 2)]))))
+
+            print('\n----total----')
+            print('STD: {}'.format(X.std(-2).mean()))
+            print('MEAN: {}'.format(X.mean()))
+
+    if test_epoch:
+        gen = TrainingGenerator(fn,
+                                sl,
+                                shuffle=True,
+                                standardize_mode='file_channelwise',
+                                batch_size=bs)
+        for epoch in range(10):
+            peek = gen[0]
+            print('Epoch: {}'.format(epoch))
+            for i in range(len(gen)):
+                X = gen[i]
+
+    if test_data:
+        gen = TrainingGenerator(fn,
+                                sl,
+                                shuffle=False,
+                                standardize_mode=None,
+                                batch_size=bs)
+        for i in range(len(gen)):
+            x, y, z = gen[i]
+            m = io.loadmat(gen.csv.iloc[i]['image'])['dataStruct'][0][0][0]
+            assert np.array_equal(x.numpy().reshape(m.shape), m)
+
+    print('test passed.')
+
