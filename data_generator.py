@@ -106,9 +106,10 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         # --- setup file IO ---
         # load a specified number of files, and enqueue them.
         # Draw samples randomly from those files and enqueue new files.
-        if buffer_length > len(self):
-            buffer_length = len(self)
+        if buffer_length > len(self.csv) * self.samples_per_file:
+            buffer_length = len(self.csv) * self.samples_per_file
         self.buffer_length = buffer_length
+
         if not shuffle and n_workers > 1:
             warnings.warn('n_workers > 1 may result in shuffeled data. n_workers set to 1.')
             n_workers = 1
