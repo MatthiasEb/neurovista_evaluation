@@ -58,17 +58,20 @@ This is a pretty naive approach on a 2D-Convolution Deep Neural Network, applied
 As described in the [paper](https://ieeexplore.ieee.org/abstract/document/8621225), the Network expects standardized 15 s segments, sampeled at 200 Hz. 
 tensorflow.keras (2.0.1) was used as Deep Learning API. 
 In order to avoid the need to either load the whole training set at once or to save the preprocessed time series, this is a different implementation than the one used in the paper.
-At the time of this writing, this code does not really reproduce the results shown in the paper. I'll try to improve this issue.
+In order to allow training on arbitrary large datasets, this implementation does not perfectly reproduce the results shown in the paper. 
+I did a few testruns on the contest data, ROC AUC of the private Set should be around .25, .7 and .8 for Patient 1, 2 and 3 respectively. 
+However, considerable variations are conceivable, see section below.
 
 ### Implementation
-Loading the original (~ 400 Hz) .mat files, standardizing (optionally, if `subtract_mean==1`), splitting them in 15 s segments is (hopefully) done asynchronously on the fly by the dataloader in forked processes.
-Subsampling is implemented as an AveragePooling Input Layer in the network. 
-The 15s Segments are then enqueued in a buffer with the size of 100 10-min-sequences, implemented as a tf.queue.RandomShuffleQueue.
-The data is therefore dequeued in random order.
+Loading the original (~ 400 Hz) .mat files, resampling to 200 Hz, standardizing (optionally, if `subtract_mean==1`), splitting them in 15 s segments is done asynchronously on the fly by the dataloader in 5 different threads.
+The 15s Segments are enqueued in a buffer with the size of 400 10-min-sequences, implemented as a tf.queue.RandomShuffleQueue.
+The data is therefore dequeued in random order, although not perfectly uniformly shuffeled, depending on the buffer size and the size of the data set. 
+I did some experiments that showed that the buffersize can have considerable impact on the performance of the algorithm.
+The bigger the buffer size, the closer are the results to the ones shown in the paper.
 The intention of this procedure was to ensure a reasonably shuffeled training set of 15 s segments while minimizing IO, working on the .mat files and having the possibility for standardization.  
-If the IO-Bandwidth of the filesystem is reasonably high, this should not pose the bottleneck during training but the GPU. 
+If the IO-Bandwidth of the filesystem is reasonably high, this should not slow down the training too much. 
 
-As described in the paper, if run_on_contest_data, 3 networks (one for each patient) are trained and evaluated individually. 
+As described in the paper, if run_on_contest_data==1, 3 networks (one for each patient) are trained and evaluated individually. 
 Subsequently, the solution file is concatenated.
 
 
