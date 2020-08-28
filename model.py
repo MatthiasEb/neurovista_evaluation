@@ -12,8 +12,7 @@ def nv1x16(n_kernels=128):
     loss = tf.keras.losses.binary_crossentropy
 
     model = tf.keras.Sequential(name='nv1x16')
-    model.add(tf.keras.layers.BatchNormalization(input_shape=(6000, 16, 1)))
-    model.add(tf.keras.layers.AveragePooling2D((2, 1)))
+    model.add(tf.keras.layers.BatchNormalization(input_shape=(3000, 16, 1)))
 
     model.add(tf.keras.layers.Conv2D(filters=n_kernels // 4,
                                      kernel_size=(5, 1),

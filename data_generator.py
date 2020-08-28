@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 import warnings
 import h5py
+from scipy.signal import resample
 
 
 # define different pipeline stages
@@ -32,6 +33,7 @@ def data_loader(loader_args):
         raise ValueError
 
     x = np.nan_to_num(x, copy=False)
+    x = resample(x, 120000, axis=0)
 
     if standardize:
         if standardize.startswith('sm'):
@@ -77,7 +79,7 @@ class TrainingGenerator(tf.keras.utils.Sequence):
         self.batch_size = batch_size
         self.segment_length_minutes = segment_length_minutes
         self.csv = df_filenames_csv
-        self.segm_length = 6000
+        self.segm_length = 3000
         self.n_channels = 16
         self.samples_per_file = self.segment_length_minutes * 4  # draw 15 s segments
         if standardize_mode not in STANDARDIZE_OPTIONS:

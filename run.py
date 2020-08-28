@@ -1,6 +1,4 @@
-import os
 import routines
-import warnings
 import json
 
 class Namespace(object):
