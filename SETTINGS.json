@@ -2,7 +2,6 @@
 "run_on_contest_data": 1,
 "mode": 1,
 "pat": 1,
-"segment_length_minutes": 10,
 "subtract_mean": 0 ,
 "model": "./trains",
 "feat": "./features",
